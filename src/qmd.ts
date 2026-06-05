@@ -1,6 +1,6 @@
 /**
  * QMD CLI Wrapper
- * 
+ *
  * Handles all communication with the QMD binary, including:
  * - Command execution with queue management
  * - JSON output parsing
@@ -15,8 +15,20 @@ const defaultExecAsync = promisify(exec);
 // Type for the async exec function
 export type ExecAsyncFn = (
 	command: string,
-	options?: { maxBuffer?: number; cwd?: string }
+	options?: { maxBuffer?: number; cwd?: string; env?: NodeJS.ProcessEnv }
 ) => Promise<{ stdout: string; stderr: string }>;
+
+function buildExecEnv(): NodeJS.ProcessEnv {
+	const extras = ["/usr/local/bin", `${process.env.HOME}/.nvm/versions/node/v24.15.0/bin`];
+	const current = process.env.PATH ?? "";
+	const parts = current.split(":").filter(Boolean);
+	for (const p of extras) {
+		if (!parts.includes(p)) {
+			parts.push(p);
+		}
+	}
+	return { ...process.env, PATH: parts.join(":") };
+}
 
 // --- Types for QMD JSON output ---
 
@@ -55,7 +67,7 @@ export interface QMDCommandResult<T = unknown> {
 	stderr?: string;
 }
 
-export type QMDErrorType = 
+export type QMDErrorType =
 	| "not_found"
 	| "no_collection"
 	| "no_embeddings"
@@ -83,11 +95,11 @@ export class QMDWrapper {
 	private indexName: string | null;
 	private vaultPath: string;
 	private execAsync: ExecAsyncFn;
-	
+
 	// Queue management - only one QMD process at a time
 	private commandQueue: Array<() => Promise<void>> = [];
 	private isProcessing = false;
-	
+
 	// Track current search process for cancellation
 	private currentSearchProcess: ChildProcess | null = null;
 
@@ -196,11 +208,12 @@ export class QMDWrapper {
 			const { stdout, stderr } = await this.execAsync(command, {
 				maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large outputs
 				cwd: this.vaultPath,
+				env: buildExecEnv(),
 			});
 			return { stdout, stderr };
 		} catch (error) {
 			const execError = error as ExecException & { stdout?: string; stderr?: string };
-			
+
 			// Check for common error conditions
 			if (execError.code === 127 || execError.message?.includes("not found")) {
 				throw new QMDError(
@@ -218,7 +231,7 @@ export class QMDWrapper {
 				);
 			}
 
-			if (execError.stderr?.includes("no embeddings") || 
+			if (execError.stderr?.includes("no embeddings") ||
 				execError.stderr?.includes("embeddings not found")) {
 				throw new QMDError(
 					"Embeddings not generated for this collection",
@@ -245,7 +258,7 @@ export class QMDWrapper {
 		if (this.execAsync !== defaultExecAsync) {
 			return this.execCommand(command);
 		}
-		
+
 		// Production: use exec directly for cancellation support
 		return new Promise((resolve, reject) => {
 			this.currentSearchProcess = exec(
@@ -253,19 +266,20 @@ export class QMDWrapper {
 				{
 					maxBuffer: 10 * 1024 * 1024,
 					cwd: this.vaultPath,
+					env: buildExecEnv(),
 				},
 				(error, stdout, stderr) => {
 					this.currentSearchProcess = null;
-					
+
 					if (error) {
 						// Check if it was killed (aborted)
 						if (error.killed || error.signal === "SIGTERM") {
 							reject(new QMDError("Search cancelled", "execution_error"));
 							return;
 						}
-						
+
 						const execError = error as ExecException & { stdout?: string; stderr?: string };
-						
+
 						if (execError.code === 127 || execError.message?.includes("not found")) {
 							reject(new QMDError(
 								`QMD binary not found at: ${this.binaryPath}`,
@@ -300,7 +314,7 @@ export class QMDWrapper {
 						));
 						return;
 					}
-					
+
 					resolve({ stdout, stderr });
 				}
 			);
@@ -321,10 +335,10 @@ export class QMDWrapper {
 				return { success: true, data, stderr };
 			} catch (error) {
 				const qmdError = error as QMDError;
-				return { 
-					success: false, 
+				return {
+					success: false,
 					error: qmdError.message,
-					stderr: qmdError.stderr 
+					stderr: qmdError.stderr
 				};
 			}
 		});
@@ -343,7 +357,7 @@ export class QMDWrapper {
 		const embeddingsCount = vectorsMatch ? parseInt(vectorsMatch[1], 10) : 0;
 
 		// Check if our collection exists in output
-		const hasCollection = stdout.includes(this.collectionName) || 
+		const hasCollection = stdout.includes(this.collectionName) ||
 			stdout.includes(`qmd://${this.collectionName}/`);
 
 		// Check for "No collections" message
@@ -371,7 +385,7 @@ export class QMDWrapper {
 				try {
 					const { stdout } = await this.execCommand(listCmd);
 					// Check if our collection name appears in the output
-					if (stdout.includes(this.collectionName) || 
+					if (stdout.includes(this.collectionName) ||
 						stdout.includes(`qmd://${this.collectionName}/`)) {
 						// Collection exists
 						return { success: true };
@@ -386,10 +400,10 @@ export class QMDWrapper {
 				return { success: true, stderr };
 			} catch (error) {
 				const qmdError = error as QMDError;
-				return { 
-					success: false, 
+				return {
+					success: false,
 					error: qmdError.message,
-					stderr: qmdError.stderr 
+					stderr: qmdError.stderr
 				};
 			}
 		});
@@ -406,10 +420,10 @@ export class QMDWrapper {
 				return { success: true, stderr };
 			} catch (error) {
 				const qmdError = error as QMDError;
-				return { 
-					success: false, 
+				return {
+					success: false,
 					error: qmdError.message,
-					stderr: qmdError.stderr 
+					stderr: qmdError.stderr
 				};
 			}
 		});
@@ -429,10 +443,10 @@ export class QMDWrapper {
 				return { success: true, stderr };
 			} catch (error) {
 				const qmdError = error as QMDError;
-				return { 
-					success: false, 
+				return {
+					success: false,
 					error: qmdError.message,
-					stderr: qmdError.stderr 
+					stderr: qmdError.stderr
 				};
 			}
 		});
@@ -518,10 +532,10 @@ export class QMDWrapper {
 				}
 			} catch (error) {
 				const qmdError = error as QMDError;
-				return { 
-					success: false, 
+				return {
+					success: false,
 					error: qmdError.message,
-					stderr: qmdError.stderr 
+					stderr: qmdError.stderr
 				};
 			}
 		});
@@ -551,10 +565,10 @@ export class QMDWrapper {
 				}
 			} catch (error) {
 				const qmdError = error as QMDError;
-				return { 
-					success: false, 
+				return {
+					success: false,
 					error: qmdError.message,
-					stderr: qmdError.stderr 
+					stderr: qmdError.stderr
 				};
 			}
 		});
